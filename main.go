@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -248,7 +249,7 @@ func pathToResourceURI(path string) string {
 }
 
 type GetFileInfoArguments struct {
-	Path string `json:"path" jsonschema:"required"`
+	Path string `json:"path" jsonschema:"required,description=The path to the file or directory"`
 }
 
 // handleGetFileInfo handles the "get_file_info" tool call
@@ -331,7 +332,7 @@ func (s *FilesystemServer) handleGetFileInfo(ctx context.Context, req GetFileInf
 }
 
 type CreateDirectoryArg struct {
-	Path string `json:"path" jsonschema:"required"`
+	Path string `json:"path" jsonschema:"required,description=The path to the directory to create"`
 }
 
 // handleCreateDirectory handles the "create_directory" tool call
@@ -379,7 +380,7 @@ func (s *FilesystemServer) handleCreateDirectory(ctx context.Context, request Cr
 			fmt.Sprintf("Error creating directory: %v", err)))
 		return result, err
 	}
-
+	// Return both text content and embedded resource
 	resourceURI := pathToResourceURI(validPath)
 	result.Content = append(result.Content, mcp_golang.NewTextContent(fmt.Sprintf("Successfully created directory %s", path)))
 	result.Content = append(result.Content, mcp_golang.NewTextResourceContent(resourceURI, fmt.Sprintf("Directory: %s", validPath), "text/plain"))
@@ -411,7 +412,7 @@ func (s *FilesystemServer) handleListAllowedDirectories(request EmptyArgs) (*mcp
 }
 
 type ListDirectoryArg struct {
-	Path string `json:"path" jsonschema:"required"`
+	Path string `json:"path" jsonschema:"required,description=The path to the directory to list"`
 }
 
 // handleListDirectory handles the "list_directory" tool call
@@ -481,9 +482,90 @@ func (s *FilesystemServer) handleListDirectory(ctx context.Context, request List
 	return resp, err
 }
 
+// DirectoryTreeArg represents the arguments for the "tree_directory" tool call.
+type DirectoryTreeArg struct {
+	Path     string `json:"path" jsonschema:"required,description=The path to the directory to list"`
+	Pretty   bool   `json:"pretty" jsonschema:"required，description=Whether to pretty print the directory tree"`
+	MaxDepth int    `json:"max_depth" jsonschema:"description=The maximum depth to list,default=3"`
+}
+
+// handleTreeDirectory handles the "tree_directory" tool call
+// input: {"jsonrpc":"2.0","method":"tools/call","params":{"name":"tree_directory","arguments":{"path":"/Users/your/Downloads","pretty":true,"max_depth":100}},"id":12}
+func (s *FilesystemServer) handleTreeDirectory(ctx context.Context, request DirectoryTreeArg) (*mcp_golang.ToolResponse, error) {
+	path := request.Path
+	pretty := request.Pretty
+	maxDepth := request.MaxDepth
+	resp := &mcp_golang.ToolResponse{}
+	if maxDepth == 0 {
+		maxDepth = 100
+	} else if maxDepth <= 0 {
+		resp.Content = append(resp.Content, mcp_golang.NewTextContent("maxDepth must be a positive integer"))
+		return resp, errors.New("maxDepth must be a positive integer")
+	}
+	validPath, err := s.validatePath(path)
+	if err != nil {
+		resp.Content = append(resp.Content, mcp_golang.NewTextContent(fmt.Sprintf("Error Stat: %v", err)))
+		return resp, err
+	}
+
+	type TreeEntry struct {
+		Name     string      `json:"name"`
+		Type     string      `json:"type"`
+		Children []TreeEntry `json:"children,omitempty"`
+	}
+
+	var buildTree func(string, int) ([]TreeEntry, error)
+	buildTree = func(currentPath string, depth int) ([]TreeEntry, error) {
+		entries, err := os.ReadDir(currentPath)
+		if err != nil {
+			return nil, err
+		}
+		var result []TreeEntry
+		for _, entry := range entries {
+			entryData := TreeEntry{
+				Name: entry.Name(),
+				Type: "file",
+			}
+			if entry.IsDir() {
+				entryData.Type = "directory"
+				if depth < maxDepth {
+					children, err := buildTree(filepath.Join(currentPath, entry.Name()), depth+1)
+					if err != nil {
+						return nil, err
+					}
+					entryData.Children = children
+				}
+			}
+			result = append(result, entryData)
+		}
+		return result, nil
+	}
+
+	tree, err := buildTree(validPath, 0)
+	if err != nil {
+		resp.Content = append(resp.Content, mcp_golang.NewTextContent(fmt.Sprintf("Error Tree: %v", err)))
+		return resp, err
+	}
+	// If tree is nil, it will serialize to null; we want [] instead.
+	if tree == nil {
+		tree = []TreeEntry{}
+	}
+	indent := ""
+	if pretty {
+		indent = "  "
+	}
+	jsonData, err := json.MarshalIndent(tree, "", indent)
+	if err != nil {
+		resp.Content = append(resp.Content, mcp_golang.NewTextContent(fmt.Sprintf("Error Data: %v", err)))
+		return resp, err
+	}
+	resp.Content = append(resp.Content, mcp_golang.NewTextContent(string(jsonData)))
+	return resp, nil
+}
+
 type MoveFileArg struct {
-	Source      string `json:"source" jsonschema:"required"`
-	Destination string `json:"destination" jsonschema:"required"`
+	Source      string `json:"source" jsonschema:"required,description=The path to the file to move"`
+	Destination string `json:"destination" jsonschema:"required,description=The destination path for the file"`
 }
 
 // handleMoveFile handles the "move_file" tool call
@@ -571,7 +653,7 @@ func (s *FilesystemServer) handleMoveFile(ctx context.Context, request MoveFileA
 }
 
 type ReadFileArg struct {
-	Path string `json:"path" jsonschema:"required"`
+	Path string `json:"path" jsonschema:"required,description=The path to the file to read"`
 }
 
 // handleReadFile handles the "read_file" tool call
@@ -702,8 +784,8 @@ func (s *FilesystemServer) handleReadFile(ctx context.Context, request ReadFileA
 }
 
 type SearchFilesArg struct {
-	Path    string `json:"path" jsonschema:"required"`
-	Pattern string `json:"pattern" jsonschema:"required"`
+	Path    string `json:"path" jsonschema:"required,description=The path to the directory to search"`
+	Pattern string `json:"pattern" jsonschema:"required,description=The search pattern"`
 }
 
 // handleSearchFiles handles the "search_files" tool call
@@ -760,9 +842,9 @@ func (s *FilesystemServer) handleSearchFiles(ctx context.Context, request Search
 }
 
 type WriteFileArg struct {
-	Path    string `json:"path" jsonschema:"required"`
-	Content string `json:"content" jsonschema:"required"`
-	Mode    string `json:"mode" jsonschema:"required"` // "create", "append", "overwrite"
+	Path    string `json:"path" jsonschema:"required,description=The path to the file to write"`
+	Content string `json:"content" jsonschema:"required,description=The content to write to the file"`
+	Mode    string `json:"mode" jsonschema:"required,description=The write mode (create, append, overwrite)"`
 }
 
 // handleWriteFile handles the "write_file" tool call
@@ -849,6 +931,9 @@ func (s *FilesystemServer) handleWriteFile(ctx context.Context, request WriteFil
 	return result, nil
 }
 
+// registerFileResources registers file resources
+// list input:{"jsonrpc":"2.0","id":12,"method":"resources/list","params":{}}
+// read imput:{"jsonrpc":"2.0","id":12,"method":"resources/read","params":{"uri":"file:///Users/your/Downloads/file.txt"}}
 func (s *FilesystemServer) registerFileResources() error {
 	for _, dir := range s.allowedDirs {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -870,7 +955,6 @@ func (s *FilesystemServer) registerFileResources() error {
 				if err != nil {
 					return nil, err
 				}
-
 				// 根据 MIME 类型决定返回的内容类型
 				if isTextFile(mimeType) {
 					return mcp_golang.NewResourceResponse(mcp_golang.NewTextEmbeddedResource(resourceURI, string(content), mimeType)), nil
@@ -897,38 +981,6 @@ func (s *FilesystemServer) registerFileResources() error {
 	return nil
 }
 
-type ReadResourceRequest struct {
-	URI string
-}
-
-// handleReadResource 读取资源（文件）内容并返回
-func (s *FilesystemServer) handleReadResource(req ReadResourceRequest) (*mcp_golang.ResourceResponse, error) {
-	path := strings.TrimPrefix(req.URI, "file://") // 从 URI 中提取文件路径
-	result := &mcp_golang.ResourceResponse{}
-	// 读取文件内容
-	content, err := os.ReadFile(path)
-	if err != nil {
-		result.Contents = append(result.Contents, mcp_golang.NewTextEmbeddedResource(path,
-			fmt.Sprintf("error reading file: %v", err),
-			"text/plani"))
-		return result, err
-	}
-
-	mimeType := detectMimeType(path)
-
-	// 根据 MIME 类型决定返回的内容类型
-	if isTextFile(mimeType) {
-		return mcp_golang.NewResourceResponse(mcp_golang.NewTextEmbeddedResource(req.URI, string(content), mimeType)), nil
-	} else if isImageFile(mimeType) {
-		encodedContent := base64.StdEncoding.EncodeToString(content)
-		return mcp_golang.NewResourceResponse(mcp_golang.NewBlobEmbeddedResource(req.URI, encodedContent, mimeType)), nil
-	} else {
-		// 对于其他二进制文件，返回 base64 编码的内容
-		encodedContent := base64.StdEncoding.EncodeToString(content)
-		return mcp_golang.NewResourceResponse(mcp_golang.NewBlobEmbeddedResource(req.URI, encodedContent, mimeType)), nil
-	}
-}
-
 func (s *FilesystemServer) addFeature(ctx context.Context) error {
 	// {"jsonrpc":"2.0","id":12,"method":"tools/list"}
 	err := s.server.RegisterTool("get_file_info",
@@ -943,6 +995,9 @@ func (s *FilesystemServer) addFeature(ctx context.Context) error {
 	err = s.server.RegisterTool("list_directory",
 		"Get a detailed listing of all files and directories in a specified path.",
 		s.handleListDirectory)
+	err = s.server.RegisterTool("tree_directory",
+		"Get a recursive tree view of files and directories as a JSON structure.",
+		s.handleTreeDirectory)
 	err = s.server.RegisterTool("move_file",
 		"Move or rename files and directories.",
 		s.handleMoveFile)
@@ -960,8 +1015,6 @@ func (s *FilesystemServer) addFeature(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	/*	err = s.server.RegisterResource("file://", "File System", "Access to files and directories on the local file system",
-		"", s.handleReadResource)*/
 	return err
 }
 
