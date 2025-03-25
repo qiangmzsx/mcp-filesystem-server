@@ -189,6 +189,11 @@ func (s *FilesystemServer) searchFiles(
 			if strings.Contains(strings.ToLower(info.Name()), pattern) {
 				results = append(results, path)
 			}
+			isOK, err := filepath.Match(pattern, info.Name())
+			if isOK && err == nil {
+				results = append(results, path)
+			}
+
 			return nil
 		},
 	)
