@@ -173,33 +173,36 @@ func (s *FilesystemServer) searchFiles(
 ) ([]string, error) {
 	var results []string
 	pattern = strings.ToLower(pattern)
+	patterns := strings.Split(pattern, ",")
+	for _, pattern := range patterns {
+		err := filepath.Walk(
+			rootPath,
+			func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return nil // Skip errors and continue
+				}
 
-	err := filepath.Walk(
-		rootPath,
-		func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil // Skip errors and continue
-			}
+				// Try to validate path
+				if _, err := s.validatePath(path); err != nil {
+					return nil // Skip invalid paths
+				}
 
-			// Try to validate path
-			if _, err := s.validatePath(path); err != nil {
-				return nil // Skip invalid paths
-			}
+				if strings.Contains(strings.ToLower(info.Name()), pattern) {
+					results = append(results, path)
+				}
+				isOK, err := filepath.Match(pattern, info.Name())
+				if isOK && err == nil {
+					results = append(results, path)
+				}
 
-			if strings.Contains(strings.ToLower(info.Name()), pattern) {
-				results = append(results, path)
-			}
-			isOK, err := filepath.Match(pattern, info.Name())
-			if isOK && err == nil {
-				results = append(results, path)
-			}
-
-			return nil
-		},
-	)
-	if err != nil {
-		return nil, err
+				return nil
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	return results, nil
 }
 
@@ -789,8 +792,9 @@ func (s *FilesystemServer) handleReadFile(ctx context.Context, request ReadFileA
 }
 
 type SearchFilesArg struct {
-	Path    string `json:"path" jsonschema:"required,description=The path to the directory to search"`
-	Pattern string `json:"pattern" jsonschema:"required,description=The search pattern"`
+	Path string `json:"path" jsonschema:"required,description=The path to the directory to search"`
+	Pattern string `json:"pattern" jsonschema:"required,description=The search pattern,Single blur: *.png；Multiple blurs: *.jpg, *.jpeg, *.png, *.bmp
+"`
 }
 
 // handleSearchFiles handles the "search_files" tool call
@@ -1024,7 +1028,8 @@ func (s *FilesystemServer) addFeature(ctx context.Context) error {
 }
 
 // Main function to start the server
-// start:  ./mcp-filesystem-server /Users/ouerqiang/Downloads
+// start:  ./mcp-filesystem-server /Users/your/Downloads
+// mcp inspector : npx -y @modelcontextprotocol/inspector  /Users/your/mcp-filesystem-server  /Users/your/Downloads
 func main() {
 	done := make(chan struct{})
 	// Parse command line arguments
