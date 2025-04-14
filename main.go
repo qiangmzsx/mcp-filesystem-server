@@ -792,9 +792,8 @@ func (s *FilesystemServer) handleReadFile(ctx context.Context, request ReadFileA
 }
 
 type SearchFilesArg struct {
-	Path string `json:"path" jsonschema:"required,description=The path to the directory to search"`
-	Pattern string `json:"pattern" jsonschema:"required,description=The search pattern,Single blur: *.png；Multiple blurs: *.jpg, *.jpeg, *.png, *.bmp
-"`
+	Path    string `json:"path" jsonschema:"required,description=The path to the directory to search"`
+	Pattern string `json:"pattern" jsonschema:"description=The search pattern,Multiple Patterns are separated by English commas.Single blur: *.png；Multiple blurs: *.jpg, *.jpeg, *.png, *.bmp"`
 }
 
 // handleSearchFiles handles the "search_files" tool call
